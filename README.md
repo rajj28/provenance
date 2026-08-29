@@ -1,201 +1,128 @@
 # Provenance
 
-A professional portfolio that updates itself from evidence.
+**Your portfolio, updated by the work you already did.**
 
-Connect GitHub and other official APIs. The worker discovers activity, scores whether it belongs on a portfolio, and waits for your approval before anything is published.
+You ship things. Then your portfolio sits there, quietly lying about being current, until three days before an interview when you frantically add four projects and misremember what half of them did.
 
-> Connect the places where your work happens. AI discovers what matters, turns evidence into professional stories, and keeps your portfolio continuously up to date.
+Provenance watches the places your work actually lands — GitHub, npm, PyPI, Dev.to, arXiv, ORCID, GitLab, Kaggle — figures out which bits belong on a portfolio, writes them up honestly, and puts them on your site. Your site. The one you already built, with your design, that you're weirdly attached to.
 
-## Architecture
+You come back to change how it looks. Not what's on it.
 
-Built to stay fast as user count grows, without a microservice forest:
+---
 
-| Layer | Choice | Why |
-| --- | --- | --- |
-| Web | Next.js App Router | UI + thin APIs, horizontally scalable, CDN-friendly public pages |
-| Data | PostgreSQL 16 | Durable source of truth; JSON evidence + indexed review queues |
-| Jobs | Redis + BullMQ workers | Sync and curation off the request path; add worker replicas independently |
-| Auth | Auth.js (JWT) | Stateless sessions; credentials locally, GitHub OAuth for source connect |
-| Tokens | AES-256-GCM at rest | Least-privilege GitHub scopes; never sent to the browser |
+## The part where we tell you what it won't do
 
-```
-Browser → Next.js (web) → PostgreSQL
-                 ↓ enqueue
-               Redis → worker replicas → GitHub / registries / optional OpenAI
-GitHub webhook / cron → Next.js → same queue
-```
+Most tools in this space open with a feature list. Here's the anti-feature list instead, because it's more useful and it's the actual product philosophy:
 
-If Redis is unavailable locally, sync still runs inline so development does not hard-fail.
+**It will not make things up.** No invented download counts, no "increased engagement by 40%", no inferred job titles. If a number isn't in an API response or typed by you, it doesn't appear. The curator marks fields it's unsure about, and uncertain items never auto-publish.
 
-## Requirements
+**It will not scrape.** Every connector uses a documented public API. When a platform closes theirs, the connector dies and we say so in the UI. There's a test that fails the build if a source is listed as working but has no adapter behind it — because that exact rot already happened once, and we'd rather CI catch it than a user.
 
-- Node.js 20+
-- Docker Desktop (Postgres + Redis)
+**It will not rewrite your app.** It appends rows to your content. It does not touch your components, routes, styles, or build config. More on why below, because this is the part everyone gets wrong.
 
-## Local setup
+**It will not post anything without you clicking.** Unless you explicitly turn on Autopilot. Which has a brake. Which is on by default.
+
+---
+
+## Quickstart
 
 ```bash
-docker compose up -d
-copy .env.example .env   # Windows
-# cp .env.example .env   # macOS/Linux
-```
-
-Set `AUTH_SECRET`, `APP_ENCRYPTION_KEY`, and `CRON_SECRET` in `.env` to long random strings before any real use.
-
-```bash
+git clone <your-fork> && cd portfolio-autopilot
+docker compose up -d              # postgres + redis
+cp .env.example .env              # windows: copy .env.example .env
 npm install
-npx prisma migrate deploy   # applies prisma/migrations
-npm run dev:all
+npx prisma migrate deploy
+npm run dev:all                   # web + worker
 ```
 
-Generate real secrets before any real use:
+Now generate three secrets, because the placeholders in `.env.example` are not secrets, they're a dare:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Paste into `AUTH_SECRET`, `APP_ENCRYPTION_KEY`, `CRON_SECRET`. In production the app refuses to boot if you leave them as-is. You're welcome.
 
-- `npm run dev` — web only (inline sync if Redis is down)
-- `npm run worker` — background sync/curation
-- `npm test` — heuristic and fingerprint tests
+Open <http://localhost:3000>, make an account, connect GitHub with a personal access token (`read:user` is enough), and wait. Or click **Sync now**, because waiting is for people with patience.
 
-### Flow
+**Requirements:** Node 20+, Docker. No AI key needed — there's a heuristic curator that works offline and is genuinely decent.
 
-1. Create an account
-2. Connect GitHub (OAuth or a PAT)
-3. Wait for sync (or click **Sync now**)
-4. Review recommendations — approve / reject
-5. Edit copy on **Portfolio**
-6. Share `/p/{your-slug}`
+---
 
-## GitHub
-
-**First-class.** Official REST + Search APIs via Octokit.
-
-| Mode | What you need |
-| --- | --- |
-| Personal access token | `read:user` is enough for public profile/repos of the authenticated user. Fine-grained: Account read + public repository metadata/contents. |
-| OAuth App | Create at GitHub → Settings → Developer settings → OAuth Apps. Homepage `http://localhost:3000`. Callback `http://localhost:3000/api/integrations/github/callback`. Scopes requested: `read:user user:email`. Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. |
-| Webhooks (optional) | Point a repo or org webhook at `POST /api/webhooks/github`. Set `GITHUB_WEBHOOK_SECRET`. Events such as `push` and `release` enqueue a sync. |
-| Polling | `GET /api/cron/sync` with `Authorization: Bearer $CRON_SECRET` enqueues stale connections (15 minutes). |
-
-Private repositories are not requested in the MVP.
-
-## Other live sources (official APIs only)
-
-| Source | Auth | Notes |
-| --- | --- | --- |
-| GitLab | PAT `read_api` | gitlab.com owned public projects |
-| npm | Username | Registry search `maintainer:` |
-| PyPI | Project names | Official `/pypi/<project>/json`. PyPI has no documented endpoint listing a username's projects, so projects are named explicitly rather than scraped, and ownership is never claimed. |
-| Dev.to | Username | Forem public articles API |
-| arXiv | Author name | Atom API; name collisions marked uncertain |
-| ORCID | Public iD | Public works API v3 |
-| Kaggle | Username + API key | Official kernels list. Competition rank is not assumed. |
-
-## Autopilot
-
-How much runs without you. Set it in **Settings**.
-
-| Mode | Behaviour |
-| --- | --- |
-| 🟢 **Auto-publish** | Discoveries that clear the bar publish themselves and reach your website. Everything else still queues for review. |
-| 🟡 **Review first** | *(default)* Everything is discovered, curated and scored; nothing goes live until you approve it. |
-| 🔴 **Draft only** | Keep discovering and curating, but never change your live website. Delivery is paused. |
-
-Auto-publish is deliberately strict. An item publishes itself only if **all** of these hold:
-
-- the curator actively recommended it (`add`, not `skip`)
-- significance ≥ your threshold (default 70)
-- confidence ≥ your threshold (default 70)
-- **no field is flagged uncertain**
-
-That last condition is the important one. Uncertain fields are precisely the claims that should never appear on someone's portfolio unattended, so any item carrying one waits for a human regardless of its score.
-
-Measured against a live sync of 30 dev.to articles at the default thresholds: 7 published themselves, 23 were held for review. An auto-published item is created by the same code path as a hand-approved one, so it is identical, editable, and reversible.
-
-An unrecognised value in the database reads as `review`, never as permission to publish.
-
-## Onboarding shape
-
-The complexity is meant to stay behind the product, not in front of the user:
+## How it actually works
 
 ```
-Connect sources  →  Connect your website  →  Choose autopilot  →  Done
-   (OAuth/handle)      (repo or snippet)        (three modes)
+your commits  ┐
+your packages ┤
+your articles ┼──> discover ──> curate ──> [ you approve ] ──┬──> your website
+your papers   ┘     (API)       (score)     or Autopilot     ├──> /p/your-name
+                                                             └──> LinkedIn (optional)
 ```
 
-When a repository is connected, the app inspects it and picks the data path that framework actually reads — `data/portfolio.json` for Hugo, `_data/portfolio.json` for Jekyll, `src/data/portfolio.json` for Astro/Next/SvelteKit, and so on — so the member never has to know. Detection is best-effort; an unrecognised repo falls back to a sensible default they can change.
+1. **Discover** — adapters poll official APIs; a GitHub webhook makes pushes near-instant
+2. **Curate** — scores significance, confidence, and relevance to your target role; flags what it can't verify
+3. **Review** — you approve or reject. Or don't, if Autopilot is on
+4. **Deliver** — approved items land on your site, and optionally get shared to LinkedIn
 
-Note what this deliberately does **not** do: it never reads, rewrites, or reasons about the member's components, routes, or styles. It owns one content file and nothing else. That constraint is what makes the integration work across arbitrary frameworks and what keeps it safe to run unattended.
+Everything after step 1 runs in a background worker, so nothing blocks on a slow API.
 
-## Your own website
+---
 
-Keep your existing site, framework, and design. Two delivery routes, usable together.
+## Getting it onto *your* website
 
-### A. Embed or fetch the JSON feed
+Three ways. Pick whichever makes you least uncomfortable.
 
-Every public portfolio is served as JSON:
+### 1. Grab the JSON
 
 ```
-GET /api/portfolio/{slug}
+GET /api/portfolio/your-slug
 ```
 
-CORS-open, ETag-revalidated, and cached with a long stale window. Consume it directly, or drop in the bundled renderer:
+CORS-open, ETag-cached, no auth. Do whatever you want with it. This is just data.
+
+### 2. Paste one line
 
 ```html
 <div id="provenance"></div>
-<script src="https://YOUR-APP/embed.js" data-slug="your-slug"></script>
+<script src="https://your-app/embed.js" data-slug="your-slug"></script>
 ```
 
-`embed.js` ships **no styling by default**. It emits semantic markup with stable `pv-` class names and lets the host page's CSS do everything, so it inherits any design. Options:
+Ships **zero CSS**. It renders semantic markup with stable `pv-` classes and then gets out of the way, so your stylesheet is in charge. Works on React, Astro, WordPress, Squarespace, a single `index.html` you wrote in 2019 — anything that runs a script tag.
 
-| Attribute | Effect |
-| --- | --- |
-| `data-target` | CSS selector to render into (default `#provenance`) |
-| `data-styles="basic"` | Inject a minimal starter stylesheet instead of none |
-| `data-sections="projects,writing"` | Render only these sections, in this order |
+| Attribute | What it does |
+|---|---|
+| `data-target` | Where to render (default `#provenance`) |
+| `data-styles="basic"` | Fine, here's some starter CSS |
+| `data-sections="projects,writing"` | Only these, in this order |
 | `data-limit="3"` | Cap items per section |
-| `data-headings="false"` | Omit section headings |
+| `data-headings="false"` | No section headings |
 
-Use several script tags with different `data-target`s to place sections in different parts of a page. The renderer builds every node with `createElement`/`textContent` — nothing from the API is ever interpolated as HTML — and on a failed fetch it leaves the container's existing content untouched, so an outage never blanks part of your site. It also fires a `provenance:loaded` event for layout code that needs to re-run.
+Use several script tags with different targets to scatter sections around a page. If the fetch fails, it leaves your existing content alone — an outage will never blank part of your site.
 
-### B. Write into your site's repository
+### 3. Let it commit to your repo
 
-Two strategies, chosen when you connect.
+For static sites. Two strategies:
 
-**Own a data file** — we manage one `portfolio.json`; you wire it into a template once. (JSON only: this strategy overwrites the whole file, so it can never be pointed at a source module.)
+**Own a file** — we manage `data/portfolio.json`, you wire it into a template once. We detect your framework and pick the path it actually reads (`_data/` for Jekyll, `data/` for Hugo, `src/data/` for Astro and Next, and so on), so you don't have to remember.
 
-**Append to the file your site already uses** — no wiring at all. We read the content file your site already renders, adopt *its* field names, and add rows.
+**Append to what you already have** — no wiring at all. We read the content file your site *already* renders, adopt *its* field names, and add rows.
 
 ```jsonc
-// your src/data/projects.json, before
-[
-  { "name": "Weather Dashboard", "blurb": "…", "link": "…", "tech": "React", "year": 2024 }
-]
+// src/data/projects.json — before
+[{ "name": "Weather Dashboard", "blurb": "...", "tech": "React", "year": 2024 }]
 
-// after — your field names, your types, your formatting
-[
-  { "name": "Weather Dashboard", "blurb": "…", "link": "…", "tech": "React", "year": 2024 },
-  { "name": "provenance-cli", "blurb": "…", "link": "…", "tech": "TypeScript, Rust", "year": 2026 }
-]
+// after
+[{ "name": "Weather Dashboard", "blurb": "...", "tech": "React", "year": 2024 },
+ { "name": "provenance-cli",    "blurb": "...", "tech": "TypeScript, Rust", "year": 2026 }]
 ```
 
-Note what happened there: `tech` stayed a **string** because that file stores it as one, and `year` stayed a **number**. We match the column types already in the file rather than imposing ours, so existing template code keeps working.
+Look closely: `tech` stayed a **string** and `year` stayed a **number**, because that's how *your* file stores them. We match your types instead of imposing ours. Your templates keep working.
 
-#### The rules append mode operates under
+---
 
-- **Append-only, and proven.** Every write is verified before it is sent: the same number of pre-existing entries, byte-identical, in the same order, with exactly N new rows at the end. A violation raises and nothing is written.
-- **Your field names, never ours.** Keys are inferred from the rows already in the file.
-- **No invented values.** A key we cannot fill (`coverImage`, `featured`) is omitted rather than given a placeholder — an empty string in an image field renders a broken image.
-- **Nothing outside the array changes.** Sibling keys in a wrapped document are checked too.
-- **Idempotent.** New items are chosen by reading the live file and matching on URL then title, so a re-run adds nothing and hand-edits are respected.
-- **Refuses rather than guesses.** Unparseable JSON, two candidate arrays, or no title-like field → we decline and say why.
+## "But my projects are hardcoded in a .tsx file"
 
-#### Source modules (.ts / .tsx / .js / .jsx)
-
-Plenty of portfolios keep their content in a module rather than a JSON file, so those are supported too — with a real TypeScript parser, never a regular expression.
+Yeah. Ours too. It handles that.
 
 ```tsx
 // src/Projects.tsx — before
@@ -206,182 +133,163 @@ export const items = [
   { title: "First", url: "https://first.example", img: heroImg, icon: <Star />, tags: ["Go"] },
 ];
 
-export default function Projects() { /* …your JSX, untouched… */ }
+export default function Projects() { /* ...your JSX... */ }
 ```
 
-We add one element to `items`. Your imports, comments, JSX and formatting are byte-identical afterwards, and `img`/`icon` are reported as **not statically readable, so never written** — we don't fabricate an image path.
+It adds one element to `items`. Your imports, comments, JSX, and formatting come out byte-identical. `img` and `icon` are reported as *not statically readable, so never written* — it won't invent an image path for you.
 
-Four things make this safe:
+This is the scary feature, so here's exactly why it isn't:
 
-1. **A real parser.** The TypeScript compiler API reads the module; nothing is matched with regex.
-2. **The mutation is a single text insertion at one offset.** The rest of the file is copied byte-for-byte *by construction*. We never re-print through the TS emitter, which would reformat everything.
-3. **Post-parse validation.** The result is re-parsed and rejected unless it is syntactically clean, targets the same array, has exactly N more elements, every pre-existing element's source text is unchanged, and nothing before or after the insertion point moved.
-4. **A conservative reader.** Spreads, computed keys, methods, function-built arrays, arrays nested inside a component, or two candidate arrays in one file are all **refused**, not guessed at.
+1. **Real parser.** TypeScript compiler API. Zero regex. Regex-editing someone's source is how you end up in an incident channel.
+2. **One text insertion, one offset.** Everything else is copied byte-for-byte *by construction*. We never re-print through the TS emitter, because that reformats your whole file and you'd rightly never forgive us.
+3. **Re-parsed afterward.** The result is rejected unless it's syntactically clean, targets the same array, has exactly N more elements, and every pre-existing element is textually unchanged.
+4. **Cowardly by design.** Spreads, computed keys, methods, arrays built by function calls, arrays nested inside a component, or two candidate arrays in one file — it refuses and tells you why. It does not get creative.
 
-String values are escaped for the file's own quote style, so a title containing a quote cannot terminate the literal and turn the rest of the file into code — there is a test for exactly that.
+A title containing a double quote won't break out of the string literal and turn the rest of your file into code. There's a test named after that exact nightmare.
 
-**What this still cannot verify is your full build** — types, lint, and your own invariants. That is precisely why **pull-request mode is the default**: your CI runs before anything reaches your live site. Use direct-commit mode only if you are comfortable without that gate.
+**What it can't check is your build** — types, lint, your own invariants. Which is why **pull requests are the default**. Your CI runs before anything reaches production. Direct-commit exists, it's just opt-in and you're choosing that.
 
-Only these directories are scanned: `data/`, `src/data/`, `_data/`, `src/_data/`, `content/`, `src/content/`, `app/data/`, `public/data/`, `src/`, `src/config/`, `src/constants/`, `config/`, `lib/`, `src/lib/`. Tests, `*.d.ts`, framework config files, and `package.json` and friends are excluded.
+**The line it won't cross:** it reads a module-level array of object literals. It never reads or rewrites your application *logic*. Owning a content layer works across arbitrary frameworks. Rewriting components does not, and anyone promising otherwise hasn't thought about who gets paged.
 
-#### The line that stays
+---
 
-We read a module-level array of object literals. We do not read, rewrite, or reason about your application *logic* — components, routes, styles, and build config are never touched. Owning a content layer is safe across arbitrary frameworks; rewriting components is not.
+## Autopilot
 
-Use **Scan repository** on the Sources page to see which files qualify, how many entries each has, and exactly which fields would be written.
+Set it in Settings. Three positions:
 
-#### Setup
+| | Mode | What happens |
+|---|---|---|
+| 🟢 | **Auto-publish** | Good stuff publishes itself and reaches your site |
+| 🟡 | **Review first** | *(default)* Nothing ships without you |
+| 🔴 | **Draft only** | Keep curating, touch nothing live |
 
-1. **Sources → Your own website → Commit to your site's repo**
-2. Repository (`owner/repo` or a GitHub URL) and branch
-3. Choose a strategy: own a data file, or append to an existing one
-4. Choose **pull request** (default; you review before your site changes) or **direct commit**
-5. Paste a **fine-grained** token scoped to that one repository, with **Contents: Read and write** (plus **Pull requests: Read and write** for PR mode)
+Auto-publish is deliberately fussy. An item only goes out if **all** of:
 
-Access is verified when you connect, not on the first background write. The token is stored encrypted and is deliberately separate from your GitHub *source* connection — reading your public activity and writing to a repository are different grants, and the read connection is never silently upgraded.
+- the curator actually recommended it
+- significance >= your threshold (default 70)
+- confidence >= your threshold (default 70)
+- **nothing about it is flagged uncertain**
 
-Writes are hash-compared against the last payload, so an unchanged portfolio produces no commit. The file path must be a `.json` path inside the repo; traversal and non-JSON targets are rejected. Only that one file is ever touched.
+That last one is the whole ballgame. Uncertain claims are exactly the ones that shouldn't appear on a real person's portfolio while they're asleep.
 
-### What triggers an update
+Real numbers, from a live sync of 30 Dev.to articles at default thresholds: **7 published themselves, 23 waited for a human.** It's a filter, not a rubber stamp.
 
-```
-push to GitHub ─→ webhook ─→ sync ─→ curate ─→ review queue
-                                                   │
-                                          you approve (one click)
-                                                   ├─→ /api/portfolio/{slug} is live immediately
-                                                   ├─→ commit / PR into your site repo
-                                                   └─→ optional: share to LinkedIn
-```
+An unrecognised value in the database reads as `review`. Failing safe is the only acceptable direction to fail.
 
-Approving or editing an item queues a site publish, coalesced per user per minute so approving five things in a row produces one commit. Repo writes never run inline in the request that approved an item.
+---
 
-## LinkedIn (publishing only — one-way by necessity)
+## Sources
 
-LinkedIn is asymmetric, and the asymmetry is LinkedIn's, not ours.
+**Working, via official APIs:**
 
-| Direction | Supported | Why |
-| --- | --- | --- |
-| **Publish** a portfolio item as a LinkedIn post | **Yes** | The self-serve *Share on LinkedIn* product grants `w_member_social`. The app posts via `POST /rest/posts`. |
-| **Import** your LinkedIn posts | **No** | Reading a member's own posts needs `r_member_social`, which LinkedIn documents as restricted to approved partners. There is no self-serve path. |
-| **Import** your headline, roles, education, skills | **No** | *Sign In with LinkedIn (OpenID Connect)* returns only `sub`, `name`, `given_name`, `family_name`, `picture`, `locale`, `email`. The profile/positions APIs have been partner-gated since 2019. |
+| Source | You provide | Notes |
+|---|---|---|
+| GitHub | OAuth or a PAT | Repos, releases, READMEs, languages, merged PRs. Private repos are never requested |
+| GitLab | PAT (`read_api`) | Owned public projects on gitlab.com |
+| npm | Username | Packages the registry attributes to you |
+| PyPI | Project names | See below |
+| Dev.to | Username | Public articles, no key needed |
+| arXiv | Author name | Name collisions get flagged uncertain, because "J. Smith" is not an identifier |
+| ORCID | Your iD | Public works |
+| Kaggle | Username + API key | Kernels you authored |
 
-So LinkedIn history is entered through **Import evidence** (pick *Role / position*, source label *LinkedIn*, paste the permalink), and is then curated and filed exactly like discovered evidence. LinkedIn is never scraped.
+**PyPI needs explaining.** There is no documented endpoint that lists a username's projects — the profile page is HTML only. So you name your projects and we read the official project JSON API. We also never claim you own them, because the API doesn't say that.
 
-### Setup
+### The graveyard
 
-1. Create an app at <https://www.linkedin.com/developers/apps>.
-2. On the **Products** tab add both, and wait until each shows as granted:
-   - *Sign In with LinkedIn using OpenID Connect* → `openid`, `profile`, `email`
-   - *Share on LinkedIn* → `w_member_social`
-3. **Auth** tab → authorized redirect URL: `$APP_URL/api/integrations/linkedin/callback`
-4. Set `LINKEDIN_CLIENT_ID` and `LINKEDIN_CLIENT_SECRET`.
-5. Connect from **Sources → Publishing**, then use **Share on LinkedIn** on any item in **Portfolio**.
+Platforms that took their APIs away, kept here as an honest record rather than quietly dropped:
 
-Nothing is ever posted automatically. Publishing is a per-item action: the app drafts the text from the item's own facts, shows it, and posts only what you confirm. Drafts restate the evidence and invent nothing.
+- **Hashnode** — killed free GraphQL access on 2026-05-13; reading now needs a paid Pro plan. The unauthenticated endpoint redirects to their announcement, which is a bold way to break every integration you had
+- **LinkedIn** — see below, it's a whole thing
+- **Devpost** — no public user API, never had one
+- **Notion / Google Drive / YouTube** — real APIs exist, deliberately deferred
 
-Notes: member access tokens last ~60 days and refresh tokens are partner-only, so the app prompts to reconnect on expiry. LinkedIn caps members at 150 posts/day; this app additionally throttles to 20/hour. Post text is encoded for LinkedIn's `little` format, which reserves ``| { } @ [ ] ( ) < > # * _ ~ \`` and requires escaping all of them — `#hashtags` are converted to LinkedIn's hashtag template so they still render as tags. `LINKEDIN_API_VERSION` pins the monthly API version (default `202608`).
+For all of these: import the item manually. It gets curated and filed exactly like discovered evidence. We'd rather have an honest manual path than a connector that lies about working.
 
-## Restricted (no fake connectors)
+---
 
-Hashnode retired free GraphQL API access on 2026-05-13 — reading now requires a paid Pro plan, and the unauthenticated endpoint redirects to their announcement. Devpost has no public user API. Notion and Google Drive exist as APIs but are deferred (sharing model / invasive scanning). Import evidence manually instead.
+## LinkedIn: a one-way street
 
-A connector is only listed as live if it works against the vendor's official API today. `src/lib/sources/catalog.test.ts` fails the build if a `live: true` entry has no adapter behind it.
+LinkedIn will let this app **write to your feed** but **not read it**. We can post your new project. We cannot see the post you made yesterday.
 
-## AI curation
+| | Supported? | Because |
+|---|---|---|
+| Publish a portfolio item as a post | **Yes** | *Share on LinkedIn* is self-serve, grants `w_member_social` |
+| Read your own posts | **No** | Needs `r_member_social` — "restricted, approved partners only" |
+| Read your headline, roles, education, skills | **No** | Sign In with LinkedIn returns your name, picture, locale, email. That's the lot |
 
-If `OPENAI_API_KEY` is set, the worker asks the model to classify using **only** fetched facts. If it is unset, a transparent heuristic curator runs (stars, releases, README substance, trivial PR titles, recency, target-role overlap). Uncertain fields are labeled; numbers are never invented.
+So LinkedIn is a **destination**, not a source. Which turns out fine, because we already know about your new project — we saw the commit. Your LinkedIn history goes in via manual import.
 
-Rejected items stay rejected unless the payload hash changes.
+If some tool claims it auto-imports your LinkedIn profile, it's scraping, and that's against their ToS and your interests.
 
-## Portfolio sections
+**Setup:** create an app at [linkedin.com/developers](https://www.linkedin.com/developers/apps), add both *Sign In with LinkedIn using OpenID Connect* and *Share on LinkedIn*, set the redirect to `$APP_URL/api/integrations/linkedin/callback`, fill in `LINKEDIN_CLIENT_ID` and `LINKEDIN_CLIENT_SECRET`.
 
-Approved evidence files itself into a section automatically — nothing needs to be sorted by hand. The mapping is total, so no item can fall off the page:
+Nothing posts automatically. You get a draft composed from the item's own facts, you edit it, you press the button. Tokens last about 60 days (refresh tokens are partner-only, sorry), then it asks you to reconnect.
 
-| Evidence kind | Section |
-| --- | --- |
-| `role` | Experience |
-| `project` | Projects |
-| `package`, `contribution` | Open source |
-| `article` | Writing & talks |
-| `publication` | Publications |
-| `certification` | Credentials |
-| `achievement` | Achievements |
+---
 
-Two cases are routed by source rather than kind, because the kind alone is ambiguous: an npm "project" and a GitHub fork both belong under Open source. Sections render in the order above on `/p/{slug}` and on **Portfolio**, and empty sections are omitted. See `src/lib/portfolio/sections.ts`.
+## Configuration
 
-## Environment
+Everything lives in `.env`; see `.env.example` for the full list.
 
-See `.env.example`. Important keys:
+| Variable | Required | |
+|---|---|---|
+| `DATABASE_URL` | yes | Postgres |
+| `REDIS_URL` | yes | Queue |
+| `APP_URL` | yes | Absolute, used in OAuth callbacks and OG tags |
+| `AUTH_SECRET`, `APP_ENCRYPTION_KEY`, `CRON_SECRET` | yes | 32+ chars each in production, and not the placeholder |
+| `GITHUB_CLIENT_ID` / `_SECRET` | no | Enables "Connect with GitHub"; a PAT works without it |
+| `LINKEDIN_CLIENT_ID` / `_SECRET` | no | Publishing only |
+| `OPENAI_API_KEY` | no | Without it, the heuristic curator runs. It's fine |
 
-- `DATABASE_URL` — Postgres
-- `REDIS_URL` — Redis
-- `AUTH_SECRET` — Auth.js
-- `APP_ENCRYPTION_KEY` — token encryption
-- `OPENAI_API_KEY` — optional
-- `CRON_SECRET` — cron endpoint
-- `LINKEDIN_CLIENT_ID` / `LINKEDIN_CLIENT_SECRET` / `LINKEDIN_API_VERSION` — optional, publishing only
+`src/lib/env.ts` validates all of it at import. A misconfigured deploy dies at startup with a readable message instead of at 3am with a stack trace.
 
-In production `AUTH_SECRET`, `APP_ENCRYPTION_KEY`, and `CRON_SECRET` must each be at least 32 characters and must not be the placeholder text from `.env.example`. `src/lib/env.ts` validates the whole environment on import, so a misconfigured deploy fails at startup with a readable message instead of at the first request.
+**`APP_ENCRYPTION_KEY` cannot be rotated** without re-encrypting stored credentials. Rotating it invalidates every connected source and LinkedIn token. Pick it once.
 
-## Tests
-
-```bash
-npm test
-```
-
-Covers the heuristic curator, evidence fingerprinting, the rejected-item reopen policy, catalog/adapter drift, portfolio section routing, OAuth state signing and expiry, and LinkedIn text encoding.
-
-The suite is hermetic — `vitest.config.ts` supplies its own environment, so it does not depend on a local `.env` and runs unchanged in CI.
-
-```bash
-npm run verify   # typecheck + lint + test
-```
-
-## Notes
-
-- The package is ESM (`"type": "module"`), because `octokit` v5 is ESM-only and the BullMQ worker imports it.
-- If Redis is unreachable, `enqueueSourceSync` gives up after `QUEUE_ENQUEUE_TIMEOUT_MS` (default 3000) and runs the sync inline. BullMQ requires `maxRetriesPerRequest: null`, so without that bound a down Redis would hang the request instead of falling back.
-- Sync jobs are de-duplicated per connection per minute, so a burst of webhooks collapses into one job while the next cron tick still gets through.
+---
 
 ## Deploying
 
 ```bash
-cp .env.example .env.production   # then fill in real secrets
-npm run docker:prod               # builds and starts web + worker + migrate + postgres + redis
+cp .env.example .env.production   # fill in real values
+npm run docker:prod
 ```
 
-`docker-compose.prod.yml` runs `prisma migrate deploy` to completion before web and worker start, and — unlike the dev compose file — publishes no database or cache port to the host. Put a TLS-terminating reverse proxy in front of `web`.
+Brings up web + worker + migrations + postgres + redis. Migrations run to completion before anything serves traffic. Unlike the dev compose file, no database port is exposed to the host. Put a TLS proxy in front of `web`.
 
-The image is multi-stage: `runner` serves the Next.js standalone output as a non-root user, and `worker` runs the BullMQ consumer from the same source. Both are in one `Dockerfile`.
+Then point a scheduler at `GET /api/cron/sync` with `Authorization: Bearer $CRON_SECRET` every few minutes.
 
-### What is hardened
+**What's hardened:** CSP, HSTS and the usual headers, `X-Powered-By` gone, no-store on authenticated routes. AES-256-GCM for stored credentials. Constant-time cron secret comparison. Signed, 10-minute OAuth state. Sign-in throttled inside the `authorize` callback — the chokepoint a direct POST to the credentials endpoint also has to pass through, which is the mistake worth not making. `/api/health` reports Postgres as fatal and Redis as degraded-but-serving, because sync falls back to inline. Worker drains in-flight jobs on SIGTERM.
 
-| Area | Behaviour |
-| --- | --- |
-| Config | `src/lib/env.ts` validates every variable on import and refuses to boot in production on a weak or placeholder secret |
-| Headers | CSP, HSTS, `X-Frame-Options: DENY`, `nosniff`, Referrer-Policy, Permissions-Policy, COOP; `X-Powered-By` removed; `/app/*` and `/api/*` set no-store |
-| Auth | Sign-in throttled inside the Credentials `authorize` callback — the chokepoint a direct `POST /api/auth/callback/credentials` also passes through — bucketed by both client and account; sign-up throttled and race-safe |
-| Secrets | Source credentials and LinkedIn tokens encrypted with AES-256-GCM; cron bearer compared in constant time; OAuth `state` signed and valid for 10 minutes |
-| Health | `GET /api/health` checks Postgres and Redis. Postgres down → 503; Redis down → `degraded` but still 200, since sync falls back inline |
-| Shutdown | The worker drains in-flight jobs on SIGTERM (25s cap) so a deploy never abandons a half-finished sync |
-| Overload | Cron only enqueues — it never falls back to running a whole batch inline — and returns 503 if the queue is unreachable |
-| SEO | `generateMetadata` with OpenGraph on `/p/{slug}`, plus `robots.txt` and a `sitemap.xml` listing only public, non-empty portfolios |
+---
 
-### Operational notes
+## Development
 
-- Point a scheduler at `GET /api/cron/sync` with `Authorization: Bearer $CRON_SECRET` every ~5 minutes.
-- Scale `worker` replicas independently of `web`; `SYNC_CONCURRENCY` sets per-replica parallelism.
-- `APP_ENCRYPTION_KEY` cannot be rotated without re-encrypting stored credentials — rotating it invalidates every connected source and LinkedIn token.
+```bash
+npm run dev:all     # web + worker
+npm test            # 151 tests
+npm run verify      # typecheck + lint + test
+```
 
-## Product paths
+The test suite is hermetic — it supplies its own environment and doesn't care about your `.env`.
 
-- `/` landing
-- `/app` dashboard
-- `/app/sources` connectors
-- `/app/discoveries` filterable evidence
-- `/app/reviews` approval queue
-- `/app/portfolio` published items
-- `/p/{slug}` public profile
-- `/api/portfolio/{slug}` public JSON feed (CORS-open)
-- `/embed.js` drop-in renderer for any website
-- `/api/health` liveness/readiness probe
+Worth reading if you're poking around:
+
+- `src/lib/site/append.ts` — the append-only proof for JSON
+- `src/lib/site/ts-append.ts` — the TypeScript-parser appender
+- `src/lib/portfolio/autopilot.ts` — what's allowed to publish unattended
+- `src/lib/sources/catalog.ts` — every connector, and honest notes on each
+
+If you add a source: official APIs only. A connector that scrapes, or that lies about working, doesn't get merged. `catalog.test.ts` will fail the build anyway, so you'd only be wasting your own time.
+
+---
+
+## Licence
+
+[AGPL-3.0](./LICENSE). Self-host it, fork it, change it, run it for your friends — go ahead. If you run a modified version as a network service, share your changes.
+
+Open source is a deliberate choice here rather than a marketing one: this app asks for a GitHub token with write access and permission to post as you. You should be able to read exactly what it does with them. Start at `src/lib/site/`.
+
+---
+
+<sub>Named for the archival sense of <em>provenance</em> — the documented chain of custody that makes a claim believable. Which is roughly the whole point.</sub>
