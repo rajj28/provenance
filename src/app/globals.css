@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+:root {
+  --paper: #f4efe6;
+  --paper-2: #ebe4d6;
+  --ink: #1c1712;
+  --ink-soft: #5c5348;
+  --line: rgba(28, 23, 18, 0.1);
+  --copper: #b85c38;
+  --copper-deep: #8f3f22;
+  --pine: #2f5d50;
+  --danger: #9b2c2c;
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-paper-2: var(--paper-2);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-line: var(--line);
+  --color-copper: var(--copper);
+  --color-copper-deep: var(--copper-deep);
+  --color-pine: var(--pine);
+  --font-sans: var(--font-outfit);
+  --font-serif: var(--font-instrument);
+}
+
+html,
+body {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+body {
+  font-family: var(--font-sans), system-ui, sans-serif;
+  min-height: 100vh;
+}
+
+h1,
+h2,
+.serif {
+  font-family: var(--font-serif), Georgia, serif;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
+
+.grain {
+  background-image: radial-gradient(rgba(28, 23, 18, 0.04) 0.6px, transparent 0.6px);
+  background-size: 7px 7px;
+}
+
+.lift {
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+.lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 40px rgba(28, 23, 18, 0.08);
+}
