@@ -1,0 +1,241 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String  @id @default(cuid())
+  name            String?
+  email           String  @unique
+  passwordHash    String?
+  image           String?
+  slug            String  @unique
+  headline        String?
+  bio             String?
+  targetRole      String?
+  location        String?
+  publicPortfolio Boolean @default(true)
+
+  /// Autopilot: how much the system may do without the member.
+  ///   "review" (default) — everything waits for approval
+  ///   "auto"             — items clearing the thresholds below publish themselves
+  ///   "draft"            — items still wait for approval, and delivery to the
+  ///                        member's own website is paused entirely
+  autopilotMode            String   @default("review")
+  autopilotMinSignificance Int      @default(70)
+  autopilotMinConfidence   Int      @default(70)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  connections     SourceConnection[]
+  evidence        Evidence[]
+  portfolioItems  PortfolioItem[]
+  syncLogs        SyncLog[]
+  linkedinAccount LinkedinAccount?
+  linkedinPosts   LinkedinPost[]
+  siteTarget      SiteTarget?
+  sitePublishes   SitePublish[]
+}
+
+/// A user's own website, which this app writes the portfolio payload into.
+///
+/// One per user. The token is a repo-scoped credential the member supplies, kept
+/// separate from their GitHub *source* connection on purpose: reading public
+/// activity and writing to a repository are very different grants, and the read
+/// connection must never be silently upgraded into a write one.
+model SiteTarget {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider        String    @default("github")
+  owner           String
+  repo            String
+  branch          String    @default("main")
+  filePath        String    @default("data/portfolio.json")
+  /// "commit" writes straight to the branch; "pr" opens a pull request instead.
+  mode            String    @default("pr")
+  /// "file"   — own a dedicated portfolio.json the member wires up once
+  /// "append" — add rows to the content file their site ALREADY renders,
+  ///            in that file's own field names, append-only
+  strategy        String    @default("file")
+  encryptedToken  String
+  /// Hash of the last payload written, so an unchanged portfolio does not
+  /// produce an empty commit on every sync.
+  lastContentHash String?
+  lastCommitSha   String?
+  lastCommitUrl   String?
+  lastPublishedAt DateTime?
+  lastError       String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+/// Audit trail of writes into a member's own repository.
+model SitePublish {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status    String
+  mode      String
+  itemCount Int      @default(0)
+  commitSha String?
+  url       String?
+  message   String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+/// A connected LinkedIn account, used for PUBLISHING only.
+///
+/// This is deliberately not a SourceConnection: LinkedIn cannot be read from
+/// (r_member_social is partner-restricted), so it must never be picked up by
+/// the cron sweep or handed to the sync engine, which would look for an adapter
+/// that does not and cannot exist.
+model LinkedinAccount {
+  id                   String   @id @default(cuid())
+  userId               String   @unique
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  personUrn            String
+  displayName          String?
+  pictureUrl           String?
+  encryptedAccessToken String
+  scope                String
+  expiresAt            DateTime
+  lastError            String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([expiresAt])
+}
+
+/// Audit trail of posts this app published to LinkedIn on a member's behalf.
+model LinkedinPost {
+  id              String         @id @default(cuid())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  portfolioItemId String?
+  portfolioItem   PortfolioItem? @relation(fields: [portfolioItemId], references: [id], onDelete: SetNull)
+  postUrn         String
+  postUrl         String
+  commentary      String
+  visibility      String
+  createdAt       DateTime       @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([portfolioItemId])
+}
+
+model SourceConnection {
+  id                   String     @id @default(cuid())
+  userId               String
+  user                 User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceType           String
+  status               String     @default("connected")
+  displayName          String
+  externalUserId       String     @default("")
+  profileUrl           String?
+  encryptedCredentials String?
+  lastSyncedAt         DateTime?
+  lastError            String?
+  syncCursor           String?
+  metadata             Json?
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+  evidence             Evidence[]
+
+  @@unique([userId, sourceType, externalUserId])
+  @@index([userId, sourceType])
+  @@index([status, lastSyncedAt])
+}
+
+model Evidence {
+  id            String            @id @default(cuid())
+  userId        String
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectionId  String?
+  connection    SourceConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  sourceType    String
+  kind          String
+  externalId    String
+  fingerprint   String
+  url           String?
+  title         String
+  summary       String?
+  occurredAt    DateTime?
+  payload       Json
+  status        String            @default("pending")
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  curation      Curation?
+  portfolioItem PortfolioItem?
+
+  @@unique([userId, fingerprint])
+  @@index([userId, status, occurredAt(sort: Desc)])
+  @@index([userId, sourceType, kind])
+}
+
+model Curation {
+  id                   String   @id @default(cuid())
+  evidenceId           String   @unique
+  evidence             Evidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  recommendation       String
+  confidence           Int
+  significance         Int
+  roleRelevance        Int
+  whyItMatters         String
+  skills               Json
+  potentialImpact      String
+  suggestedTitle       String
+  suggestedDescription String
+  evidenceNotes        String
+  uncertainFields      Json
+  model                String
+  payloadHash          String
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([recommendation, significance(sort: Desc)])
+}
+
+model PortfolioItem {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  evidenceId  String   @unique
+  evidence    Evidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  title       String
+  summary     String
+  description String
+  skills      Json
+  role        String?
+  impact      String?
+  links       Json
+  published   Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  linkedinPosts LinkedinPost[]
+
+  @@index([userId, published, sortOrder])
+}
+
+model SyncLog {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectionId String?
+  sourceType   String
+  status       String
+  message      String?
+  itemsFound   Int       @default(0)
+  createdAt    DateTime  @default(now())
+  finishedAt   DateTime?
+
+  @@index([userId, createdAt(sort: Desc)])
+}
