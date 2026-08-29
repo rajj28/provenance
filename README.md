@@ -286,7 +286,7 @@ If you add a source: official APIs only. A connector that scrapes, or that lies 
 
 ## Licence
 
-[AGPL-3.0](./LICENSE). Self-host it, fork it, change it, run it for your friends — go ahead. If you run a modified version as a network service, share your changes.
+[AGPL-3.0](./LICENSE) — Copyright (C) 2026 Ruturaj Sonkamble. Self-host it, fork it, change it, run it for your friends — go ahead. If you run a modified version as a network service, share your changes.
 
 Open source is a deliberate choice here rather than a marketing one: this app asks for a GitHub token with write access and permission to post as you. You should be able to read exactly what it does with them. Start at `src/lib/site/`.
 
