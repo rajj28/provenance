@@ -15,7 +15,7 @@ export const arxivAdapter: SourceAdapter = {
     const author = ctx.credentials.author.trim();
     const query = `au:${author.replace(/\s+/g, "_")}`;
     const url = `https://export.arxiv.org/api/query?search_query=${encodeURIComponent(query)}&start=0&max_results=20`;
-    const res = await fetch(url, { headers: { "user-agent": "portfolio-autopilot/1.0" } });
+    const res = await fetch(url, { headers: { "user-agent": "provenance/1.0" } });
     if (!res.ok) throw new Error(`arXiv API failed (${res.status})`);
     const xml = await res.text();
     const entries = xml.split("<entry>").slice(1);

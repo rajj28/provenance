@@ -1,5 +1,8 @@
 # Provenance
 
+[![CI](https://github.com/rajj28/provenance/actions/workflows/ci.yml/badge.svg)](https://github.com/rajj28/provenance/actions/workflows/ci.yml)
+[![Licence: AGPL v3](https://img.shields.io/badge/licence-AGPL--3.0-blue.svg)](./LICENSE)
+
 **Your portfolio, updated by the work you already did.**
 
 You ship things. Then your portfolio sits there, quietly lying about being current, until three days before an interview when you frantically add four projects and misremember what half of them did.
@@ -27,7 +30,7 @@ Most tools in this space open with a feature list. Here's the anti-feature list 
 ## Quickstart
 
 ```bash
-git clone <your-fork> && cd portfolio-autopilot
+git clone https://github.com/rajj28/provenance.git && cd provenance
 docker compose up -d              # postgres + redis
 cp .env.example .env              # windows: copy .env.example .env
 npm install
@@ -272,6 +275,8 @@ npm run verify      # typecheck + lint + test
 ```
 
 The test suite is hermetic — it supplies its own environment and doesn't care about your `.env`.
+
+CI runs on every push and pull request, and weekly on a schedule. It checks typecheck, lint and tests on Node 20 and 22, a production build, and that every migration applies cleanly to an empty Postgres with no drift from `schema.prisma`. The weekly run exists because connectors depend on third-party APIs that change without telling anyone — it's there to catch a dead source before a user does.
 
 Worth reading if you're poking around:
 

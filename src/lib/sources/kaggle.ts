@@ -19,7 +19,7 @@ export const kaggleAdapter: SourceAdapter = {
       {
         headers: {
           authorization: `Basic ${auth}`,
-          "user-agent": "portfolio-autopilot/1.0",
+          "user-agent": "provenance/1.0",
         },
       }
     );
