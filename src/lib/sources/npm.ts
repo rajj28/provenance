@@ -13,7 +13,7 @@ export const npmAdapter: SourceAdapter = {
   async fetch(ctx) {
     const username = ctx.credentials.username.trim();
     const url = `https://registry.npmjs.org/-/v1/search?text=maintainer:${encodeURIComponent(username)}&size=40`;
-    const res = await fetch(url, { headers: { "user-agent": "portfolio-autopilot/1.0" } });
+    const res = await fetch(url, { headers: { "user-agent": "provenance/1.0" } });
     if (!res.ok) throw new Error(`npm registry search failed (${res.status})`);
     const body = (await res.json()) as {
       objects?: Array<{

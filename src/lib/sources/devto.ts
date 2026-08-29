@@ -13,7 +13,7 @@ export const devtoAdapter: SourceAdapter = {
   async fetch(ctx) {
     const username = ctx.credentials.username.trim().replace(/^@/, "");
     const res = await fetch(`https://dev.to/api/articles?username=${encodeURIComponent(username)}&per_page=30`, {
-      headers: { accept: "application/json", "user-agent": "portfolio-autopilot/1.0" },
+      headers: { accept: "application/json", "user-agent": "provenance/1.0" },
     });
     if (!res.ok) throw new Error(`Dev.to API failed (${res.status})`);
     const articles = (await res.json()) as Array<{

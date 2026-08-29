@@ -60,7 +60,7 @@ export const pypiAdapter: SourceAdapter = {
 
     for (const name of names) {
       const res = await fetch(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`, {
-        headers: { accept: "application/json", "user-agent": "portfolio-autopilot/1.0" },
+        headers: { accept: "application/json", "user-agent": "provenance/1.0" },
       });
       if (res.status === 404) {
         missing.push(name);

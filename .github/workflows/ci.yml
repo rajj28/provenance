@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  # Connectors depend on third-party APIs that change without warning. A weekly
+  # run surfaces a source that has quietly stopped working before a user finds
+  # it — the Hashnode failure mode this project already hit once.
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+# A new push to the same branch makes the previous run irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  verify:
+    name: Typecheck, lint, test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20 is the floor the README promises; 22 is what the Dockerfile ships.
+        # Both are tested so neither claim can silently become false.
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # postinstall runs `prisma generate`, so the client exists for typecheck.
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # The suite supplies its own environment (see vitest.config.ts), so it
+      # needs no database, no Redis, and no .env.
+      - name: Test
+        run: npm test
+
+  build:
+    name: Production build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # src/lib/env.ts validates on import and the build imports it, so the
+      # build needs values that satisfy the schema. These are throwaway
+      # placeholders, never used at runtime — real secrets are injected on the
+      # deployed host.
+      - name: Build
+        env:
+          NODE_ENV: production
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+          AUTH_SECRET: ci-placeholder-secret-not-used-at-runtime-only
+          APP_ENCRYPTION_KEY: ci-placeholder-key-not-used-at-runtime-only
+          CRON_SECRET: ci-placeholder-cron-not-used-at-runtime-only
+        run: npm run build
+
+  migrations:
+    name: Migrations apply cleanly
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: provenance
+          POSTGRES_PASSWORD: provenance
+          POSTGRES_DB: provenance
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U provenance -d provenance"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # Proves every migration applies to an empty database in order. A broken
+      # or out-of-order migration fails here rather than during a deploy.
+      - name: Apply migrations
+        env:
+          DATABASE_URL: postgresql://provenance:provenance@localhost:5432/provenance
+        run: npx prisma migrate deploy
+
+      # `migrate diff --exit-code` reports drift: it fails when schema.prisma
+      # describes something the migrations do not produce, which happens when
+      # someone edits the schema and forgets to generate a migration.
+      - name: Check schema matches migrations
+        env:
+          DATABASE_URL: postgresql://provenance:provenance@localhost:5432/provenance
+        run: |
+          npx prisma migrate diff \
+            --from-schema-datasource prisma/schema.prisma \
+            --to-schema-datamodel prisma/schema.prisma \
+            --exit-code \
+          && echo "No drift between schema.prisma and the applied migrations."

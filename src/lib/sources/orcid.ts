@@ -16,7 +16,7 @@ export const orcidAdapter: SourceAdapter = {
       throw new Error("ORCID iD must look like 0000-0000-0000-0000");
     }
     const res = await fetch(`https://pub.orcid.org/v3.0/${orcid}/works`, {
-      headers: { accept: "application/json", "user-agent": "portfolio-autopilot/1.0" },
+      headers: { accept: "application/json", "user-agent": "provenance/1.0" },
     });
     if (res.status === 404) throw new Error("ORCID record not found or not public");
     if (!res.ok) throw new Error(`ORCID API failed (${res.status})`);
