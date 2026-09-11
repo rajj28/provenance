@@ -466,6 +466,14 @@ export async function connectSiteAction(formData: FormData) {
 
   const mode = String(formData.get("mode") || "pr") === "commit" ? "commit" : "pr";
   const strategy = strategyRaw;
+  // Optional: which exported array to append to, for modules that hold
+  // several. Must be a plain identifier — it is compared to binding names,
+  // never interpolated into code.
+  const arrayNameRaw = String(formData.get("arrayName") || "").trim();
+  if (arrayNameRaw && !/^[A-Za-z_$][A-Za-z0-9_$]{0,79}$/.test(arrayNameRaw)) {
+    return { error: "The array name must be a plain identifier, like PROJECTS or posts." };
+  }
+  const arrayName = strategy === "append" && arrayNameRaw ? arrayNameRaw : null;
   const token = String(formData.get("token") || "").trim();
   if (!token) return { error: "A GitHub token with Contents write access is required." };
 
@@ -491,6 +499,7 @@ export async function connectSiteAction(formData: FormData) {
       filePath: resolvedPath,
       mode,
       strategy,
+      arrayName,
       encryptedToken: encryptSecret(token),
       // Force a real write on the next publish even if a previous target had
       // the identical payload hash.
@@ -621,7 +630,8 @@ export async function selectContentFileAction(path: string) {
 
   const updated = await prisma.siteTarget.updateMany({
     where: { userId: user.id },
-    data: { filePath, strategy: "append", lastContentHash: null, lastError: null },
+    // A new file means the old array name no longer applies.
+    data: { filePath, strategy: "append", arrayName: null, lastContentHash: null, lastError: null },
   });
   if (updated.count === 0) return { error: "Connect a repository first." };
 

@@ -130,7 +130,7 @@ export async function publishToSite(userId: string, reason: string): Promise<Pub
  */
 async function appendToExistingContent(
   userId: string,
-  target: { encryptedToken: string; filePath: string },
+  target: { encryptedToken: string; filePath: string; arrayName?: string | null },
   repoTarget: RepoTarget,
   payload: Awaited<ReturnType<typeof loadPayloadByUserId>>,
   reason: string
@@ -154,10 +154,22 @@ async function appendToExistingContent(
   try {
     const isModule = isSourceModule(target.filePath);
 
+    // Which array, when the module has several. The member's explicit choice
+    // wins; failing that, the kind of item being delivered picks the array
+    // whose name says it holds that kind. A batch that mixes kinds cannot go
+    // into one array, so it is refused rather than half-delivered.
+    const kinds = new Set(payload.items.map((item) => item.kind));
+    if (isModule && !target.arrayName && kinds.size > 1) {
+      throw new AppendError(
+        `This delivery mixes ${[...kinds].join(", ")} items, which belong in different arrays. Choose one array in Settings, or deliver one kind at a time.`
+      );
+    }
+    const selection = { arrayName: target.arrayName ?? undefined, kind: kinds.size === 1 ? [...kinds][0] : undefined };
+
     // Both readers expose the same thing: the rows already in the file. The
     // module reader uses a real TypeScript parser; neither one guesses.
     const existingRows = isModule
-      ? locateTsArray(source, target.filePath).elements.map((el) => el.value)
+      ? locateTsArray(source, target.filePath, selection).elements.map((el) => el.value)
       : locateJsonArray(source).rows;
 
     const schema = inferSchema(existingRows);
@@ -177,7 +189,7 @@ async function appendToExistingContent(
     // appendToJson re-serialises and diffs; appendToTsArray inserts text at one
     // offset and re-parses the result.
     const updated = isModule
-      ? appendToTsArray(source, target.filePath, rows)
+      ? appendToTsArray(source, target.filePath, rows, selection)
       : appendToJson(source, rows);
 
     const message = `chore(portfolio): add ${rows.length} item${rows.length === 1 ? "" : "s"}`;

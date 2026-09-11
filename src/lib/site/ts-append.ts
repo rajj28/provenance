@@ -161,7 +161,106 @@ type Candidate = { name: string; node: ts.ArrayLiteralExpression };
  * path: guessing which array a site renders could append projects into a list
  * of blog posts.
  */
-export function locateTsArray(source: string, fileName: string): LocatedTsArray {
+/**
+ * Pick one array from several, on evidence only. See TsArraySelection.
+ */
+function chooseArray(candidates: Candidate[], selection: TsArraySelection): Candidate {
+  if (candidates.length === 1) {
+    // One array. If the member named a different one, that is a mismatch we
+    // must not paper over — they may have renamed it since configuring.
+    if (selection.arrayName && candidates[0].name !== selection.arrayName) {
+      throw new AppendError(
+        `The file's only content array is \`${candidates[0].name}\`, not \`${selection.arrayName}\`. Update the array name in Settings.`
+      );
+    }
+    return candidates[0];
+  }
+
+  const names = candidates.map((c) => c.name).join(", ");
+
+  if (selection.arrayName) {
+    const named = candidates.filter((c) => c.name === selection.arrayName);
+    if (named.length === 1) return named[0];
+    throw new AppendError(
+      named.length === 0
+        ? `No content array named \`${selection.arrayName}\` in this file (found: ${names}). Update the array name in Settings.`
+        : `Several arrays are named \`${selection.arrayName}\`; cannot choose safely.`
+    );
+  }
+
+  if (selection.kind) {
+    const byKind = candidates.filter((c) => arrayNameMatchesKind(c.name, selection.kind as string));
+    if (byKind.length === 1) return byKind[0];
+    if (byKind.length > 1) {
+      throw new AppendError(
+        `Several arrays look like they hold ${selection.kind}s (${byKind.map((c) => c.name).join(", ")}). Choose one by name in Settings.`
+      );
+    }
+  }
+
+  throw new AppendError(
+    `Found several possible content arrays (${names}). Choose which one to append to in Settings, or split them into separate files.`
+  );
+}
+
+/**
+ * How to choose when a module holds MORE than one content array.
+ *
+ * A real portfolio often keeps everything in one file — `PROJECTS`,
+ * `EXPERIENCE`, `SKILLS` side by side in App.jsx — so refusing every such file
+ * would exclude most of the sites this exists for. Choosing is allowed only on
+ * evidence that can be checked statically, never on a guess:
+ *
+ *   1. `arrayName` — the member named the array. Nothing to infer.
+ *   2. `kind`      — the array whose NAME says it holds this kind of item
+ *                    (`projects`, `work`, `portfolio` for a project; `posts`,
+ *                    `articles`, `writing` for an article, and so on).
+ *
+ * If the evidence points at exactly one array, that array is used. If it
+ * points at none, or at two, the file is refused with the same message as
+ * before — and now with the fix spelled out. The append itself is unchanged:
+ * one text insertion, re-parsed, every existing element proven byte-identical.
+ */
+export type TsArraySelection = {
+  /** The exact exported binding to append to, as chosen by the member. */
+  arrayName?: string;
+  /** The kind of item being appended (Provenance evidence kind), for name matching. */
+  kind?: string;
+};
+
+/**
+ * Array names that mean "this list holds <kind>". Compared after lowercasing
+ * and stripping non-alphanumerics, so `PROJECTS`, `projectList`, `my_projects`
+ * and `selectedWork` all resolve. Deliberately conservative: an array named
+ * `items` or `data` matches nothing, because it could be anything.
+ */
+export const KIND_ARRAY_NAMES: Record<string, string[]> = {
+  project: ["projects", "project", "projectlist", "work", "works", "selectedwork", "portfolio", "portfolioitems", "casestudies", "builds", "apps", "repos", "repositories"],
+  role: ["experience", "experiences", "roles", "jobs", "positions", "career", "timeline", "employment", "workhistory"],
+  package: ["packages", "libraries", "libs", "modules", "tools", "opensource"],
+  contribution: ["contributions", "opensource", "oss", "pullrequests", "prs"],
+  article: ["posts", "articles", "writing", "writings", "blog", "blogposts", "essays"],
+  publication: ["publications", "papers", "research", "talks"],
+  certification: ["certifications", "certificates", "certs", "credentials"],
+  achievement: ["achievements", "awards", "honors", "honours", "wins", "hackathons"],
+};
+
+function normalizeName(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/** Whether an array's name says it holds items of `kind`. */
+export function arrayNameMatchesKind(name: string, kind: string): boolean {
+  const wanted = KIND_ARRAY_NAMES[kind];
+  if (!wanted) return false;
+  const norm = normalizeName(name);
+  // Exact vocabulary match, or a vocabulary word as the whole trailing word
+  // of a longer name (`featuredProjects`, `allPosts`) — never a bare substring,
+  // so `workshops` does not read as `work`.
+  return wanted.some((w) => norm === w || norm.endsWith(w));
+}
+
+export function locateTsArray(source: string, fileName: string, selection: TsArraySelection = {}): LocatedTsArray {
   const errors = syntaxErrors(source, fileName);
   if (errors.length) throw new AppendError(`File does not parse: ${errors[0]}`);
 
@@ -202,13 +301,8 @@ export function locateTsArray(source: string, fileName: string): LocatedTsArray 
   const chosenSet = nonEmpty.length > 0 ? nonEmpty : contentArrays;
 
   if (chosenSet.length === 0) throw new AppendError("No exported array of entries found in this file.");
-  if (chosenSet.length > 1) {
-    throw new AppendError(
-      `Found several possible content arrays (${chosenSet.map((c) => c.name).join(", ")}). Split them into separate files.`
-    );
-  }
 
-  const chosen = chosenSet[0];
+  const chosen = chooseArray(chosenSet, selection);
   for (const el of chosen.node.elements) {
     if (ts.isSpreadElement(el)) throw new AppendError("The array uses a spread, so entries cannot be counted safely.");
     if (!ts.isObjectLiteralExpression(el)) throw new AppendError("The array contains a non-object entry.");
@@ -270,9 +364,14 @@ function renderString(text: string, quote: '"' | "'"): string {
  * Insert rows and prove the result is sound. Throws rather than returning
  * anything questionable.
  */
-export function appendToTsArray(source: string, fileName: string, rows: Record<string, unknown>[]): string {
+export function appendToTsArray(
+  source: string,
+  fileName: string,
+  rows: Record<string, unknown>[],
+  selection: TsArraySelection = {}
+): string {
   if (rows.length === 0) return source;
-  const located = locateTsArray(source, fileName);
+  const located = locateTsArray(source, fileName, selection);
   const { indent } = located.style;
 
   const rendered = rows.map((row) => renderRow(row, located.style, indent));
@@ -284,7 +383,9 @@ export function appendToTsArray(source: string, fileName: string, rows: Record<s
   // The single mutation: everything before and after the offset is untouched.
   const updated = source.slice(0, located.insertPos) + insertion + source.slice(located.insertPos);
 
-  verifyTsAppend(source, updated, fileName, rows.length);
+  // Verify against the SAME array we appended to — by its resolved name, so
+  // the check cannot drift onto a different array than the insertion did.
+  verifyTsAppend(source, updated, fileName, rows.length, { arrayName: located.exportName });
   return updated;
 }
 
@@ -292,12 +393,18 @@ export function appendToTsArray(source: string, fileName: string, rows: Record<s
  * Post-parse validation. This is the gate that makes writing into someone
  * else's source acceptable.
  */
-export function verifyTsAppend(before: string, after: string, fileName: string, expectedAdded: number): void {
+export function verifyTsAppend(
+  before: string,
+  after: string,
+  fileName: string,
+  expectedAdded: number,
+  selection: TsArraySelection = {}
+): void {
   const errors = syntaxErrors(after, fileName);
   if (errors.length) throw new AppendError(`Result would not parse: ${errors[0]}. Refusing to write.`);
 
-  const a = locateTsArray(before, fileName);
-  const b = locateTsArray(after, fileName);
+  const a = locateTsArray(before, fileName, selection);
+  const b = locateTsArray(after, fileName, selection);
 
   if (a.exportName !== b.exportName) throw new AppendError("Append targeted a different array. Refusing to write.");
   if (b.elements.length !== a.elements.length + expectedAdded) {

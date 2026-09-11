@@ -17,6 +17,7 @@ type Target = {
   filePath: string;
   mode: string;
   strategy: string;
+  arrayName?: string | null;
   lastPublishedAt: Date | null;
   lastCommitUrl: string | null;
   lastError: string | null;
@@ -154,6 +155,12 @@ export function SiteRepoForm({ target }: { target: Target | null }) {
         />
       </div>
       <Field name="branch" label="Branch" placeholder="main" defaultValue={target?.branch || "main"} />
+      <Field
+        name="arrayName"
+        label="Array to append to — only for a .js/.ts file holding several arrays; blank picks by item kind"
+        placeholder="PROJECTS"
+        defaultValue={target?.arrayName || ""}
+      />
       <Field
         name="filePath"
         label="File to write"

@@ -146,7 +146,15 @@ This is the scary feature, so here's exactly why it isn't:
 1. **Real parser.** TypeScript compiler API. Zero regex. Regex-editing someone's source is how you end up in an incident channel.
 2. **One text insertion, one offset.** Everything else is copied byte-for-byte *by construction*. We never re-print through the TS emitter, because that reformats your whole file and you'd rightly never forgive us.
 3. **Re-parsed afterward.** The result is rejected unless it's syntactically clean, targets the same array, has exactly N more elements, and every pre-existing element is textually unchanged.
-4. **Cowardly by design.** Spreads, computed keys, methods, arrays built by function calls, arrays nested inside a component, or two candidate arrays in one file — it refuses and tells you why. It does not get creative.
+4. **Cowardly by design.** Spreads, computed keys, methods, arrays built by function calls, arrays nested inside a component — it refuses and tells you why. It does not get creative.
+
+**Several arrays in one file** — `PROJECTS`, `EXPERIENCE`, `SKILLS` side by side in `App.jsx` — is how most portfolios are actually written, so that is handled rather than refused. But only on evidence, never a guess:
+
+- You can **name the array** in Settings (`PROJECTS`). That is the whole decision.
+- Otherwise the **kind of item** picks the array whose *name* says it holds that kind: a project goes to `projects` / `work` / `portfolio`, an article to `posts` / `articles` / `writing`, a role to `experience` / `jobs`. An array called `items` or `data` never matches — it could hold anything.
+- If that points at **no** array, or at **two** (`projects` *and* `featuredProjects`), it refuses and names them, so you can choose. A batch mixing kinds is refused too, rather than half-delivered.
+
+Whichever array is chosen, the append is the same single insertion, re-parsed, with every other array proven byte-identical.
 
 A title containing a double quote won't break out of the string literal and turn the rest of your file into code. There's a test named after that exact nightmare.
 
