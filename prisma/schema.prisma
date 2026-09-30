@@ -62,6 +62,10 @@ model SiteTarget {
   /// "append" — add rows to the content file their site ALREADY renders,
   ///            in that file's own field names, append-only
   strategy        String    @default("file")
+  /// For append mode on a source module holding several content arrays: the
+  /// exported binding to append to (e.g. "PROJECTS"). Null means "choose by
+  /// the kind of item, and refuse if that is ambiguous".
+  arrayName       String?
   encryptedToken  String
   /// Hash of the last payload written, so an unchanged portfolio does not
   /// produce an empty commit on every sync.
